@@ -1,21 +1,23 @@
+// src/components/Login.js
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API_BASE_URL } from '../config';
 
-const Login = ({ onLogin }) => {
-  const [credentials, setCredentials] = useState({ 
-    username: '', 
-    password: '' 
+const Login = ({ onLogin, onSwitchToRegister }) => {
+  const [credentials, setCredentials] = useState({
+    username: '',
+    password: ''
   });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const navigate = useNavigate();
 
   const handleSubmit = (e) => {
     e.preventDefault();
     setIsLoading(true);
     setError('');
-    
-    // Send JSON data instead of form data
+
     const loginData = {
       username: credentials.username,
       password: credentials.password
@@ -28,16 +30,14 @@ const Login = ({ onLogin }) => {
     })
     .then(response => {
       console.log('Login response:', response.data);
-      alert('Login successful!');
       onLogin(response.data);
+      navigate('/dashboard');
     })
     .catch(error => {
       console.error('Login error:', error);
       if (error.response) {
-        // Server responded with error
         setError(`Login failed: ${error.response.data?.error || 'Invalid credentials'}`);
       } else if (error.request) {
-        // Network error
         setError('Network error. Please check your connection.');
       } else {
         setError('An unexpected error occurred.');
@@ -48,53 +48,83 @@ const Login = ({ onLogin }) => {
     });
   };
 
+  const handleChange = (e) => {
+    setCredentials(prev => ({
+      ...prev,
+      [e.target.name]: e.target.value
+    }));
+  };
+
+  const switchToRegister = () => {
+    navigate('/register');
+  };
+
   return (
-    <div className="login-container">
-      <div className="login-card">
-        <div className="login-header">
-          <div className="login-logo">📄</div>
-          <h2>Sign in to your account</h2>
-          <p>Document Search System</p>
+    <div className="auth-wrapper">
+      <div className="auth-card">
+        <div className="auth-header">
+          <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>📄</div>
+          <h2>Welcome Back</h2>
+          <p>Sign in to your account</p>
         </div>
-        <form className="login-form" onSubmit={handleSubmit}>
-          <div className="input-group">
+
+        {error && (
+          <div className="error-banner">
+            <span>⚠️</span>
+            {error}
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit}>
+          <div className="form-group">
             <label htmlFor="username">Username</label>
             <input
               type="text"
               id="username"
-              placeholder="Enter your username"
+              name="username"
               value={credentials.username}
-              onChange={(e) => setCredentials({...credentials, username: e.target.value})}
-              disabled={isLoading}
+              onChange={handleChange}
+              placeholder="Enter your username"
               required
+              disabled={isLoading}
             />
           </div>
-          <div className="input-group">
+
+          <div className="form-group">
             <label htmlFor="password">Password</label>
             <input
               type="password"
               id="password"
-              placeholder="Enter your password"
+              name="password"
               value={credentials.password}
-              onChange={(e) => setCredentials({...credentials, password: e.target.value})}
-              disabled={isLoading}
+              onChange={handleChange}
+              placeholder="Enter your password"
               required
+              disabled={isLoading}
             />
           </div>
-          
-          {error && (
-            <div className="error-message">
-              <span className="error-icon">⚠️</span>
-              {error}
-            </div>
-          )}
-          
-          <button type="submit" className="login-btn" disabled={isLoading}>
-            {isLoading ? 'Signing in...' : 'Sign in'}
+
+          <button 
+            type="submit" 
+            className="auth-btn"
+            disabled={isLoading}
+          >
+            {isLoading ? (
+              <div className="form-loading">
+                <div className="form-spinner"></div>
+                Signing In...
+              </div>
+            ) : (
+              'Sign In'
+            )}
           </button>
         </form>
-        <div className="login-footer">
-          <p>Need help? Contact your administrator</p>
+
+        <div className="auth-switch">
+          <p>Don't have an account?</p>
+          <a href="#" onClick={(e) => { e.preventDefault(); switchToRegister(); }}>
+            Create Account
+          </a>
         </div>
       </div>
     </div>

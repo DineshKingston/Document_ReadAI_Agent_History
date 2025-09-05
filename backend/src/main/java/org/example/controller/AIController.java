@@ -7,14 +7,7 @@ import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.CrossOrigin;
-import org.springframework.web.bind.annotation.DeleteMapping;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import org.example.service.AIService;
@@ -69,6 +62,15 @@ public class AIController {
             response.put("timestamp", System.currentTimeMillis());
             return ResponseEntity.status(500).body(response);
         }
+    }
+    @RequestMapping(method = RequestMethod.OPTIONS, value = "/**")
+    public ResponseEntity<Void> handleOptionsAI() {
+        return ResponseEntity.ok()
+                .header("Access-Control-Allow-Origin", "*")
+                .header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS,HEAD")
+                .header("Access-Control-Allow-Headers", "*")
+                .header("Access-Control-Max-Age", "3600")
+                .build();
     }
 
     // ============================================
@@ -222,9 +224,11 @@ public class AIController {
             if (files.length == 0) {
                 response.put("success", false);
                 response.put("error", "No files provided");
-                response.put("hint", "Send files as form-data with key 'files'");
                 return ResponseEntity.badRequest().body(response);
             }
+
+            // ✅ ENHANCED: Clear and reinitialize document storage
+            documentProcessingService.clearAllDocuments();
 
             int successCount = 0;
             List<String> successFiles = new ArrayList<>();
@@ -233,46 +237,87 @@ public class AIController {
 
             for (MultipartFile file : files) {
                 try {
+                    System.out.println("=== PROCESSING FILE: " + file.getOriginalFilename() + " ===");
+                    System.out.println("File size: " + file.getSize() + " bytes");
+                    System.out.println("Content type: " + file.getContentType());
+
                     if (file.isEmpty()) {
-                        failedFiles.add(file.getOriginalFilename() + " (empty file)");
+                        String error = file.getOriginalFilename() + " (file is empty)";
+                        failedFiles.add(error);
+                        System.out.println("❌ Skipping empty file: " + file.getOriginalFilename());
                         continue;
                     }
 
-                    System.out.println("Processing file: " + file.getOriginalFilename() + " (size: " + file.getSize() + " bytes)");
+                    // ✅ ENHANCED: Validate content before processing
+                    if (file.getSize() > 10 * 1024 * 1024) { // 10MB limit
+                        String error = file.getOriginalFilename() + " (file too large: " + file.getSize() + " bytes)";
+                        failedFiles.add(error);
+                        System.out.println("❌ File too large: " + file.getOriginalFilename());
+                        continue;
+                    }
+
                     String result = documentProcessingService.processDocument(file);
-                    successCount++;
-                    successFiles.add(file.getOriginalFilename());
-                    totalSize += file.getSize();
-                    System.out.println("✅ Successfully processed: " + file.getOriginalFilename());
+
+                    // ✅ CRITICAL: Verify document was actually stored
+                    int documentsAfterProcessing = documentProcessingService.getDocumentCount();
+                    if (documentsAfterProcessing > successCount) {
+                        successCount++;
+                        successFiles.add(file.getOriginalFilename());
+                        totalSize += file.getSize();
+                        System.out.println("✅ Successfully processed and stored: " + file.getOriginalFilename());
+                    } else {
+                        String error = file.getOriginalFilename() + " (processing completed but document not stored)";
+                        failedFiles.add(error);
+                        System.out.println("❌ Processing completed but storage failed: " + file.getOriginalFilename());
+                    }
 
                 } catch (Exception e) {
-                    failedFiles.add(file.getOriginalFilename() + " (" + e.getMessage() + ")");
+                    String error = file.getOriginalFilename() + " (" + e.getMessage() + ")";
+                    failedFiles.add(error);
                     System.err.println("❌ Failed to process: " + file.getOriginalFilename() + " - " + e.getMessage());
+                    e.printStackTrace();
                 }
             }
 
-            response.put("success", successCount > 0);
-            response.put("message", "Successfully processed " + successCount + " out of " + files.length + " files");
-            response.put("totalDocuments", documentProcessingService.getDocumentCount());
+            // ✅ ENHANCED: Final verification
+            int finalDocumentCount = documentProcessingService.getDocumentCount();
+            List<String> finalDocumentNames = documentProcessingService.getDocumentNames();
+
+            System.out.println("=== FINAL RESULTS ===");
+            System.out.println("Success count: " + successCount);
+            System.out.println("Final document count: " + finalDocumentCount);
+            System.out.println("Document names: " + finalDocumentNames);
+
+            boolean overallSuccess = finalDocumentCount > 0;
+
+            response.put("success", overallSuccess);
+            response.put("message", "Processed " + successCount + " out of " + files.length + " files");
+            response.put("totalDocuments", finalDocumentCount);
             response.put("successCount", successCount);
             response.put("successFiles", successFiles);
             response.put("failedFiles", failedFiles);
-            response.put("failCount", files.length - successCount);
-            response.put("documentNames", documentProcessingService.getDocumentNames());
+            response.put("failCount", failedFiles.size());
+            response.put("documentNames", finalDocumentNames);
             response.put("totalUploadSize", totalSize);
             response.put("timestamp", System.currentTimeMillis());
 
             return ResponseEntity.ok(response);
 
         } catch (Exception e) {
-            System.err.println("❌ Error in uploadMultipleFiles: " + e.getMessage());
+            System.err.println("❌ Critical error in uploadMultipleFiles: " + e.getMessage());
             e.printStackTrace();
+
             response.put("success", false);
-            response.put("error", "Error uploading files: " + e.getMessage());
+            response.put("error", "Critical processing error: " + e.getMessage());
+            response.put("totalDocuments", 0);
+            response.put("successCount", 0);
+            response.put("failCount", files.length);
             response.put("timestamp", System.currentTimeMillis());
+
             return ResponseEntity.status(500).body(response);
         }
     }
+
 
     // ============================================
     // STATUS ENDPOINT

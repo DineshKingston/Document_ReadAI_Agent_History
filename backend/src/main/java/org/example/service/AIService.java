@@ -26,8 +26,13 @@ public class AIService {
 
     private final OkHttpClient client;
     private final ObjectMapper objectMapper;
+
+    // ✅ ENHANCED: Much longer rate limiting with exponential backoff
     private long lastRequestTime = 0;
-    private static final long MIN_REQUEST_INTERVAL_MS = 2000;
+    private static final long MIN_REQUEST_INTERVAL_MS = 10000; // 10 seconds minimum
+    private static final long MAX_BACKOFF_MS = 300000; // 5 minutes maximum
+    private int consecutiveRateLimitErrors = 0;
+    private long lastSuccessfulRequestTime = 0;
 
     public AIService() {
         this.client = new OkHttpClient.Builder()
@@ -38,11 +43,12 @@ public class AIService {
         this.objectMapper = new ObjectMapper();
     }
 
-    // Enhanced method for multi-document questions
+    // ✅ ENHANCED: Smart rate limiting with exponential backoff
     public String askQuestionEnhanced(String question, String documentContext) {
         System.out.println("AIService.askQuestionEnhanced called");
         System.out.println("Question: " + question);
         System.out.println("Document context length: " + (documentContext != null ? documentContext.length() : 0));
+        System.out.println("Consecutive rate limit errors: " + consecutiveRateLimitErrors);
 
         if (useMockAI) {
             return generateEnhancedMockResponse(question, documentContext);
@@ -56,23 +62,84 @@ public class AIService {
             return "Please provide a valid question.";
         }
 
-        // Rate limiting check
+        // ✅ ENHANCED: Exponential backoff calculation
         long currentTime = System.currentTimeMillis();
-        if (currentTime - lastRequestTime < MIN_REQUEST_INTERVAL_MS) {
-            return "Please wait a moment before asking another question.";
+        long requiredDelay = MIN_REQUEST_INTERVAL_MS;
+
+        if (consecutiveRateLimitErrors > 0) {
+            // Exponential backoff: 10s, 20s, 40s, 80s, 160s, max 5min
+            long backoffMultiplier = Math.min((1L << consecutiveRateLimitErrors), 30);
+            requiredDelay = Math.min(MIN_REQUEST_INTERVAL_MS * backoffMultiplier, MAX_BACKOFF_MS);
+            System.out.println("⏳ Exponential backoff active: " + requiredDelay + "ms delay");
+        }
+
+        // ✅ ENFORCE: Strict rate limiting with helpful messages
+        long timeSinceLastRequest = currentTime - lastRequestTime;
+        if (timeSinceLastRequest < requiredDelay) {
+            long waitTime = requiredDelay - timeSinceLastRequest;
+            System.out.println("⏳ Rate limiting: waiting " + waitTime + "ms");
+
+            return String.format(
+                    "⏳ **AI Cooling Down** (%d seconds remaining)\n\n" +
+                            "Due to high API usage, I need to wait **%d seconds** before processing your next question.\n\n" +
+                            "**🔍 Meanwhile, try the search function** - it works perfectly and provides comprehensive results from your documents!\n\n" +
+                            "**📊 Your question:** \"%s\"\n" +
+                            "**📄 Documents ready:** All documents are loaded and searchable\n\n" +
+                            "**💡 Tip:** Search function provides instant results while AI service recovers.",
+                    waitTime / 1000,
+                    waitTime / 1000,
+                    question
+            );
         }
 
         try {
             String result = callGeminiAPIEnhanced(question, documentContext);
             lastRequestTime = System.currentTimeMillis();
+
+            // ✅ CHECK: Did we get rate limited in the response?
+            if (result.contains("Rate limit exceeded") || result.contains("high demand") ||
+                    result.contains("too many requests") || result.contains("quota exceeded")) {
+                consecutiveRateLimitErrors++;
+                System.out.println("❌ Rate limit detected in response. Count: " + consecutiveRateLimitErrors);
+
+                long nextAvailableMinutes = (MIN_REQUEST_INTERVAL_MS * Math.min((1L << consecutiveRateLimitErrors), 30)) / 60000;
+
+                return String.format(
+                        "⏳ **Gemini API Temporarily Overloaded** (Attempt #%d)\n\n" +
+                                "Google's AI service is experiencing high demand right now.\n\n" +
+                                "**🔍 Smart Search Alternative:**\n" +
+                                "While waiting for AI service to recover, use the search function for immediate, comprehensive results from your documents.\n\n" +
+                                "**⏰ Next AI attempt available in:** %d minutes\n" +
+                                "**📄 Your documents are fully searchable right now!**\n\n" +
+                                "**💡 Search provides:** Instant results, content highlighting, and comprehensive document analysis.",
+                        consecutiveRateLimitErrors,
+                        Math.max(nextAvailableMinutes, 1)
+                );
+            }
+
+            // ✅ SUCCESS: Reset error counter
+            consecutiveRateLimitErrors = 0;
+            lastSuccessfulRequestTime = System.currentTimeMillis();
+            System.out.println("✅ Successful AI response received, resetting backoff");
             return result;
+
         } catch (Exception e) {
             System.err.println("Gemini API error: " + e.getMessage());
             e.printStackTrace();
-            return "Sorry, I encountered an error while processing your question: " + e.getMessage();
+            consecutiveRateLimitErrors++;
+
+            return String.format(
+                    "❌ **AI Service Error** (Attempt #%d)\n\n" +
+                            "**Technical issue:** %s\n\n" +
+                            "**🔍 Search is fully operational** - try using search for immediate results from your documents.\n\n" +
+                            "**📄 All your documents are accessible** through the search function while AI service recovers.",
+                    consecutiveRateLimitErrors,
+                    e.getMessage()
+            );
         }
     }
 
+    // ✅ ENHANCED: Summary generation with same rate limiting
     public String generateSummaryEnhanced(String documentContent) {
         System.out.println("AIService.generateSummaryEnhanced called");
         System.out.println("Document content length: " + (documentContent != null ? documentContent.length() : 0));
@@ -85,17 +152,46 @@ public class AIService {
             return "Gemini AI service is not configured. Please set your Gemini API key.";
         }
 
+        // Apply same rate limiting logic as questions
+        long currentTime = System.currentTimeMillis();
+        long timeSinceLastRequest = currentTime - lastRequestTime;
+        long requiredDelay = MIN_REQUEST_INTERVAL_MS;
+
+        if (consecutiveRateLimitErrors > 0) {
+            long backoffMultiplier = Math.min((1L << consecutiveRateLimitErrors), 30);
+            requiredDelay = Math.min(MIN_REQUEST_INTERVAL_MS * backoffMultiplier, MAX_BACKOFF_MS);
+        }
+
+        if (timeSinceLastRequest < requiredDelay) {
+            long waitTime = requiredDelay - timeSinceLastRequest;
+            return String.format(
+                    "⏳ **Summary Generation Delayed**\n\n" +
+                            "Please wait **%d seconds** before requesting a summary.\n\n" +
+                            "**🔍 Alternative:** Use search to explore specific topics in your documents right now!",
+                    waitTime / 1000
+            );
+        }
+
         try {
             String result = callGeminiAPIEnhanced("GENERATE_COMPREHENSIVE_SUMMARY", documentContent);
             lastRequestTime = System.currentTimeMillis();
+
+            if (result.contains("Rate limit exceeded")) {
+                consecutiveRateLimitErrors++;
+                return "⏳ **AI Summary Temporarily Unavailable**\n\nUse search to explore your documents while AI service recovers.";
+            }
+
+            consecutiveRateLimitErrors = 0;
             return result;
         } catch (Exception e) {
             System.err.println("Gemini API error: " + e.getMessage());
             e.printStackTrace();
+            consecutiveRateLimitErrors++;
             return "Sorry, I encountered an error while generating the summary: " + e.getMessage();
         }
     }
 
+    // ✅ Your existing callGeminiAPIEnhanced method remains the same
     private String callGeminiAPIEnhanced(String question, String documentContext) throws Exception {
         // Enhanced prompt for better multi-document analysis
         String prompt;
@@ -158,7 +254,7 @@ public class AIService {
         generationConfig.put("temperature", 0.7);
         generationConfig.put("topK", 40);
         generationConfig.put("topP", 0.95);
-        generationConfig.put("maxOutputTokens", 4096); // Increased for comprehensive answers
+        generationConfig.put("maxOutputTokens", 4096);
         requestBody.put("generationConfig", generationConfig);
 
         String jsonBody = objectMapper.writeValueAsString(requestBody);
@@ -235,6 +331,36 @@ public class AIService {
         }
     }
 
+    // ✅ NEW: Add method to check if AI service is currently available
+    public boolean isAIAvailable() {
+        long currentTime = System.currentTimeMillis();
+        long timeSinceLastRequest = currentTime - lastRequestTime;
+        long requiredDelay = MIN_REQUEST_INTERVAL_MS;
+
+        if (consecutiveRateLimitErrors > 0) {
+            long backoffMultiplier = Math.min((1L << consecutiveRateLimitErrors), 30);
+            requiredDelay = Math.min(MIN_REQUEST_INTERVAL_MS * backoffMultiplier, MAX_BACKOFF_MS);
+        }
+
+        return timeSinceLastRequest >= requiredDelay;
+    }
+
+    // ✅ NEW: Get time until AI becomes available (in seconds)
+    public long getSecondsUntilAIAvailable() {
+        if (isAIAvailable()) return 0;
+
+        long currentTime = System.currentTimeMillis();
+        long timeSinceLastRequest = currentTime - lastRequestTime;
+        long requiredDelay = MIN_REQUEST_INTERVAL_MS;
+
+        if (consecutiveRateLimitErrors > 0) {
+            long backoffMultiplier = Math.min((1L << consecutiveRateLimitErrors), 30);
+            requiredDelay = Math.min(MIN_REQUEST_INTERVAL_MS * backoffMultiplier, MAX_BACKOFF_MS);
+        }
+
+        return (requiredDelay - timeSinceLastRequest) / 1000;
+    }
+
     // Legacy methods for backward compatibility
     public String askQuestion(String question, String documentContext) {
         return askQuestionEnhanced(question, documentContext);
@@ -258,6 +384,8 @@ public class AIService {
 
     public void resetState() {
         lastRequestTime = 0;
+        consecutiveRateLimitErrors = 0;
+        lastSuccessfulRequestTime = 0;
         System.out.println("AI service state reset successfully");
     }
 
@@ -265,4 +393,3 @@ public class AIService {
         return !useMockAI && geminiApiKey != null && !geminiApiKey.trim().isEmpty() && !geminiApiKey.equals("YOUR_GEMINI_API_KEY_HERE");
     }
 }
-
