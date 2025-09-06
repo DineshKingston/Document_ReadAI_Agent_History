@@ -29,62 +29,43 @@ public class DocumentProcessingService {
         try {
             String filename = file.getOriginalFilename();
             System.out.println("=== PROCESSING FILE: " + filename + " ===");
-            System.out.println("File size: " + file.getSize() + " bytes");
-            System.out.println("Content type: " + file.getContentType());
-            System.out.println("Storage state before: " + documentStorage.size() + " documents");
 
             if (file.isEmpty()) {
                 throw new IllegalArgumentException("File is empty: " + filename);
             }
 
-            String content;
+            String content = extractTextFromFile(file);
 
-            // ✅ CRITICAL FIX: Handle session restoration files
-            if (file.getContentType() != null && file.getContentType().equals("text/plain")) {
-                System.out.println("🔄 Detected session restoration file (text/plain)");
-                content = new String(file.getBytes(), "UTF-8");
-                System.out.println("✅ Session restoration content extracted: " + content.length() + " characters");
-
-                // Validate restored content
-                if (content.trim().isEmpty()) {
-                    throw new IllegalArgumentException("Session restoration file has no content: " + filename);
-                }
-
-            } else {
-                System.out.println("📄 Processing original file upload");
-                content = extractTextFromFile(file);
-            }
-
-            // ✅ Enhanced content validation
             if (content == null || content.trim().isEmpty()) {
                 throw new IllegalArgumentException("No content extracted from: " + filename);
-            }
-
-            if (content.length() < 10) {
-                System.out.println("⚠️ Very short content detected: " + content.length() + " characters");
-                // Enhance short content instead of rejecting it
-                content = enhanceShortContent(filename, content, file.getSize());
             }
 
             String documentId = UUID.randomUUID().toString();
             DocumentInfo docInfo = new DocumentInfo(documentId, filename, content, LocalDateTime.now(), file.getSize());
 
-            // ✅ CRITICAL: Ensure storage operation succeeds
-            documentStorage.put(documentId, docInfo);
+            // ✅ CRITICAL: Ensure storage operation with verification
+            synchronized (documentStorage) {
+                documentStorage.put(documentId, docInfo);
 
-            // Verify storage
-            if (!documentStorage.containsKey(documentId)) {
-                throw new RuntimeException("Failed to store document in memory: " + filename);
+                // Immediate verification
+                if (!documentStorage.containsKey(documentId)) {
+                    throw new RuntimeException("Failed to store document: " + filename);
+                }
+
+                // Double-check content
+                DocumentInfo stored = documentStorage.get(documentId);
+                if (stored.getContent() == null || stored.getContent().trim().isEmpty()) {
+                    throw new RuntimeException("Document stored but content is empty: " + filename);
+                }
             }
 
-            System.out.println("✅ Successfully stored: " + filename + " (ID: " + documentId + ")");
-            System.out.println("✅ Storage state after: " + documentStorage.size() + " documents");
-            System.out.println("✅ Document names: " + getDocumentNames());
+            System.out.println("✅ Document verified in storage: " + filename);
+            ensureDocumentPersistence(); // Debug verification
 
             return "Document processed successfully: " + filename;
 
         } catch (Exception e) {
-            System.err.println("❌ Failed to process document: " + file.getOriginalFilename() + " - " + e.getMessage());
+            System.err.println("❌ Failed to process document: " + e.getMessage());
             e.printStackTrace();
             throw new RuntimeException("Failed to process document: " + e.getMessage(), e);
         }
@@ -223,16 +204,32 @@ public class DocumentProcessingService {
 
         StringBuilder combinedContent = new StringBuilder();
         combinedContent.append("=== MULTI-DOCUMENT ANALYSIS ===\n");
-        combinedContent.append("Total Documents: ").append(documentStorage.size()).append("\n\n");
+        combinedContent.append("Total Documents: ").append(documentStorage.size()).append("\n");
+        combinedContent.append("Analysis Timestamp: ").append(LocalDateTime.now()).append("\n\n");
 
         int docCount = 1;
         for (DocumentInfo doc : documentStorage.values()) {
             System.out.println("=== COMBINING DOCUMENT " + docCount + ": " + doc.getFilename() + " ===");
-            String docHeader = String.format("=== DOCUMENT %d: %s ===\n", docCount, doc.getFilename());
+
+            // ✅ ENHANCED: Add document metadata
+            String docHeader = String.format(
+                    "=== DOCUMENT %d: %s ===\n" +
+                            "File Type: %s\n" +
+                            "File Size: %d bytes\n" +
+                            "Upload Time: %s\n" +
+                            "Content Length: %d characters\n\n",
+                    docCount,
+                    doc.getFilename(),
+                    doc.getFileType() != null ? doc.getFileType() : "Unknown",
+                    doc.getFileSize() != null ? doc.getFileSize() : 0,
+                    doc.getUploadTime() != null ? doc.getUploadTime().toString() : "Unknown",
+                    doc.getContent() != null ? doc.getContent().length() : 0
+            );
+
             String docFooter = String.format("\n=== END OF DOCUMENT %d ===\n\n", docCount);
 
             combinedContent.append(docHeader);
-            combinedContent.append(doc.getContent());
+            combinedContent.append(doc.getContent() != null ? doc.getContent() : "No content available");
             combinedContent.append(docFooter);
             docCount++;
         }
@@ -281,6 +278,20 @@ public class DocumentProcessingService {
             throw new RuntimeException("Failed to clear documents: " + e.getMessage());
         }
     }
+    public synchronized void ensureDocumentPersistence() {
+        System.out.println("=== DOCUMENT PERSISTENCE CHECK ===");
+        System.out.println("Current storage size: " + documentStorage.size());
+        System.out.println("Storage object ID: " + System.identityHashCode(documentStorage));
+
+        if (documentStorage.isEmpty()) {
+            System.err.println("❌ WARNING: Document storage is empty!");
+        } else {
+            documentStorage.forEach((id, doc) -> {
+                System.out.println("✅ Document stored: " + doc.getFilename() + " (" +
+                        (doc.getContent() != null ? doc.getContent().length() : 0) + " chars)");
+            });
+        }
+    }
 
     /**
      * ✅ ENHANCED: Get document count with error handling
@@ -295,6 +306,8 @@ public class DocumentProcessingService {
             return 0;
         }
     }
+
+
 
     /**
      * ✅ ENHANCED: Get document names with error handling

@@ -1,10 +1,8 @@
 package org.example.controller;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -78,44 +76,69 @@ public class AIController {
     // ============================================
 
     @PostMapping("/ask")
-    public ResponseEntity<Map<String, Object>> askQuestion(@RequestBody Map<String, String> request) {
+    public ResponseEntity<Map<String, Object>> askQuestion(
+            @RequestBody Map<String, Object> request,
+            @RequestHeader(value = "X-Request-ID", required = false) String requestId,
+            @RequestHeader(value = "X-Session-Context", required = false) String sessionContext,
+            @RequestHeader(value = "X-Conversation-Turn", required = false) String conversationTurn,
+            HttpServletRequest httpRequest) {
+
         Map<String, Object> response = new HashMap<>();
         try {
-            String question = request.get("question");
             System.out.println("=== AI QUERY DEBUG ===");
-            System.out.println("Question received: " + question);
+            System.out.println("Request received: " + request);
 
-            if (question == null || question.trim().isEmpty()) {
+            // ✅ CRITICAL: Check document state before processing
+            int docCount = documentProcessingService.getDocumentCount();
+            List<String> docNames = documentProcessingService.getDocumentNames();
+
+            System.out.println("=== DOCUMENT STATE CHECK ===");
+            System.out.println("Document count: " + docCount);
+            System.out.println("Document names: " + docNames);
+
+            // Force persistence check
+            documentProcessingService.ensureDocumentPersistence();
+
+            String question = String.valueOf(request.get("question")).trim();
+            if (question.isEmpty()) {
                 response.put("success", false);
-                response.put("error", "Question is required");
+                response.put("error", "Question cannot be empty");
                 return ResponseEntity.badRequest().body(response);
             }
 
-            // Get combined content from ALL uploaded documents
+            // ✅ Get documents with detailed logging
             String allDocumentsContent = documentProcessingService.getAllDocumentsContentEnhanced();
 
-            System.out.println("Document count: " + documentProcessingService.getDocumentCount());
-            System.out.println("Document names: " + documentProcessingService.getDocumentNames());
-            System.out.println("Combined content length: " + (allDocumentsContent != null ? allDocumentsContent.length() : 0));
+            System.out.println("=== CONTENT RETRIEVAL DEBUG ===");
+            System.out.println("Content length: " + (allDocumentsContent != null ? allDocumentsContent.length() : 0));
+            System.out.println("Content is null: " + (allDocumentsContent == null));
+            System.out.println("Content is empty: " + (allDocumentsContent != null && allDocumentsContent.trim().isEmpty()));
 
             if (allDocumentsContent == null || allDocumentsContent.trim().isEmpty()) {
+                // ✅ ENHANCED: Try to recover from upload/multiple endpoint state
+                System.err.println("❌ No documents found, but upload may have succeeded");
+
                 response.put("success", false);
-                response.put("error", "No documents uploaded. Please upload documents first using the /api/ai/upload/multiple endpoint.");
-                response.put("availableEndpoints", List.of("/api/ai/upload/multiple", "/api/ai/health", "/api/ai/status"));
+                response.put("error", "Documents not found in AI backend. Please try re-uploading your files.");
+                response.put("debugInfo", Map.of(
+                        "documentCount", docCount,
+                        "documentNames", docNames,
+                        "contentLength", allDocumentsContent != null ? allDocumentsContent.length() : 0,
+                        "suggestion", "Try refreshing the page and re-uploading files"
+                ));
                 return ResponseEntity.badRequest().body(response);
             }
 
-            // Pass combined content to AI service
+            // Continue with AI processing...
             String answer = aiService.askQuestionEnhanced(question, allDocumentsContent);
 
             response.put("success", true);
             response.put("answer", answer);
             response.put("question", question);
-            response.put("documentsAnalyzed", documentProcessingService.getDocumentCount());
-            response.put("documentNames", documentProcessingService.getDocumentNames());
+            response.put("documentsAnalyzed", docCount);
+            response.put("documentNames", docNames);
             response.put("timestamp", System.currentTimeMillis());
 
-            System.out.println("✅ AI query processed successfully");
             return ResponseEntity.ok(response);
 
         } catch (Exception e) {
@@ -123,10 +146,133 @@ public class AIController {
             e.printStackTrace();
             response.put("success", false);
             response.put("error", "Error processing question: " + e.getMessage());
-            response.put("timestamp", System.currentTimeMillis());
             return ResponseEntity.status(500).body(response);
         }
     }
+
+
+    // Add these methods to AIController.java
+
+    @PostMapping("/clear-cache")
+    public ResponseEntity<Map<String, Object>> clearCache(@RequestBody Map<String, Object> request) {
+        Map<String, Object> response = new HashMap<>();
+        try {
+            System.out.println("=== CACHE CLEAR REQUEST ===");
+            System.out.println("Request: " + request);
+
+            // Reset AI service state
+            if (aiService != null) {
+                aiService.resetState();
+            }
+
+            // Clear document processing service
+            documentProcessingService.clearAllDocuments();
+
+            response.put("success", true);
+            response.put("message", "Cache cleared successfully");
+            response.put("timestamp", System.currentTimeMillis());
+
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            System.err.println("❌ Error clearing cache: " + e.getMessage());
+            response.put("success", false);
+            response.put("error", "Error clearing cache: " + e.getMessage());
+            return ResponseEntity.status(500).body(response);
+        }
+    }
+
+    @PostMapping("/reset-context")
+    public ResponseEntity<Map<String, Object>> resetContext(@RequestBody Map<String, Object> request) {
+        Map<String, Object> response = new HashMap<>();
+        try {
+            System.out.println("=== CONTEXT RESET REQUEST ===");
+            System.out.println("Request: " + request);
+
+            // Reset AI service context
+            if (aiService != null) {
+                aiService.resetState();
+            }
+
+            response.put("success", true);
+            response.put("message", "Context reset successfully");
+            response.put("timestamp", System.currentTimeMillis());
+
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            System.err.println("❌ Error resetting context: " + e.getMessage());
+            response.put("success", false);
+            response.put("error", "Error resetting context: " + e.getMessage());
+            return ResponseEntity.status(500).body(response);
+        }
+    }
+
+
+    // ✅ HELPER: Build contextual question with session information
+    private String buildContextualQuestion(String question, Map<String, Object> metadata,
+                                           String requestId, String sessionContext, String conversationTurn) {
+        StringBuilder contextualQuestion = new StringBuilder();
+
+        // Add session markers for uniqueness
+        contextualQuestion.append("[REQUEST_ID:").append(requestId).append("] ");
+
+        if (sessionContext != null && !sessionContext.trim().isEmpty()) {
+            contextualQuestion.append("[SESSION:").append(sessionContext).append("] ");
+        }
+
+        if (conversationTurn != null && !conversationTurn.trim().isEmpty()) {
+            contextualQuestion.append("[TURN:").append(conversationTurn).append("] ");
+        }
+
+        // Add conversation context if available
+        if (metadata != null && metadata.containsKey("sessionContext")) {
+            Map<String, Object> sessionCtx = (Map<String, Object>) metadata.get("sessionContext");
+            if (sessionCtx.containsKey("isRestoredSession") &&
+                    Boolean.TRUE.equals(sessionCtx.get("isRestoredSession"))) {
+                contextualQuestion.append("[RESTORED_SESSION] ");
+            }
+
+            if (sessionCtx.containsKey("previousQuestions")) {
+                List<String> prevQuestions = (List<String>) sessionCtx.get("previousQuestions");
+                if (prevQuestions != null && !prevQuestions.isEmpty()) {
+                    contextualQuestion.append("[PREVIOUS_CONTEXT:").append(String.join(", ", prevQuestions)).append("] ");
+                }
+            }
+
+            if (sessionCtx.containsKey("responseExpectation")) {
+                String expectation = String.valueOf(sessionCtx.get("responseExpectation"));
+                if ("fresh_analysis_required".equals(expectation)) {
+                    contextualQuestion.append("[FRESH_ANALYSIS_REQUESTED] ");
+                }
+            }
+        }
+
+        contextualQuestion.append(question);
+        return contextualQuestion.toString();
+    }
+
+    // ✅ HELPER: Build enhanced context to prevent AI response caching
+    private String buildEnhancedContext(String documentContent, String sessionId,
+                                        String requestId, Map<String, Object> metadata) {
+        StringBuilder enhancedContext = new StringBuilder();
+
+        // Add unique session identifiers
+        enhancedContext.append("SESSION_ID: ").append(sessionId).append("\n");
+        enhancedContext.append("REQUEST_ID: ").append(requestId).append("\n");
+        enhancedContext.append("PROCESSING_TIMESTAMP: ").append(System.currentTimeMillis()).append("\n");
+        enhancedContext.append("ANALYSIS_TYPE: FRESH_SESSION_SPECIFIC_ANALYSIS\n\n");
+
+        // Add metadata context if available
+        if (metadata != null) {
+            enhancedContext.append("USER_CONTEXT: ").append(metadata.get("userId")).append("\n");
+            enhancedContext.append("DOCUMENT_COUNT: ").append(metadata.get("documentCount")).append("\n\n");
+        }
+
+        enhancedContext.append("DOCUMENT_CONTENT:\n");
+        enhancedContext.append(documentContent);
+
+        return enhancedContext.toString();
+    }
+
 
     // ============================================
     // DOCUMENT SUMMARY ENDPOINT
@@ -228,7 +374,7 @@ public class AIController {
             }
 
             // ✅ ENHANCED: Clear and reinitialize document storage
-            documentProcessingService.clearAllDocuments();
+//            documentProcessingService.clearAllDocuments();
 
             int successCount = 0;
             List<String> successFiles = new ArrayList<>();
@@ -288,9 +434,9 @@ public class AIController {
             System.out.println("Final document count: " + finalDocumentCount);
             System.out.println("Document names: " + finalDocumentNames);
 
-            boolean overallSuccess = finalDocumentCount > 0;
+            documentProcessingService.ensureDocumentPersistence();
 
-            response.put("success", overallSuccess);
+            response.put("success", finalDocumentCount>0);
             response.put("message", "Processed " + successCount + " out of " + files.length + " files");
             response.put("totalDocuments", finalDocumentCount);
             response.put("successCount", successCount);

@@ -111,12 +111,34 @@ public class HistoryService {
         }
     }
 
+    // ✅ ENHANCED: Ensure textContent is always stored
     public ChatSession addDocumentToTodaySession(String userId, String documentId, String fileName, String fileType, String textContent, Long fileSize) {
         try {
             ChatSession currentSession = getCurrentOrCreateTodaySession(userId, "UNIFIED_SESSION");
+
+            // ✅ VALIDATE: Ensure textContent is not null or empty
+            if (textContent == null || textContent.trim().isEmpty()) {
+                System.err.println("⚠️ WARNING: Empty textContent for document: " + fileName);
+                textContent = String.format("""
+                DOCUMENT: %s
+                UPLOADED: %s
+                FILE TYPE: %s
+                SIZE: %d bytes
+                STATUS: Document uploaded successfully but content extraction may have issues
+                
+                For full search and AI functionality, please re-upload this document.
+                """, fileName, LocalDateTime.now(), fileType, fileSize != null ? fileSize : 0);
+            }
+
+            // ✅ ENHANCED: Add document with guaranteed content
             currentSession.addDocumentWithContent(documentId, fileName, fileType, textContent, fileSize);
+
+            // ✅ ALSO: Store in restoration data for backup
+            currentSession.getRestorationData().addDocumentForRestoration(documentId, fileName, fileType, textContent);
+
             ChatSession savedSession = chatSessionRepository.save(currentSession);
-            System.out.println("✅ Added document with " + (textContent != null ? textContent.length() : 0) + " characters of content");
+            System.out.println("✅ Document stored with " + textContent.length() + " characters of content");
+
             return savedSession;
         } catch (Exception e) {
             System.err.println("❌ Error adding document with content: " + e.getMessage());
@@ -124,27 +146,37 @@ public class HistoryService {
         }
     }
 
+
     // ✅ ENHANCED: Save AI messages to both session and detailed chat history
+    // ✅ ENHANCED: Complete message storage
     public ChatSession addAiMessageToSession(String userId, String question, String aiResponse, String metadata) {
         try {
             ChatSession currentSession = getCurrentOrCreateTodaySession(userId, "UNIFIED_SESSION");
 
-            // Add to session
+            // ✅ Add user question first
             currentSession.addUserMessage(question);
+
+            // ✅ Add AI response
             currentSession.addAIMessage(aiResponse, metadata);
 
-            // ✅ Also save to detailed chat message collection
+            // ✅ CRITICAL: Also save to detailed collections for complete restoration
             saveAIChatMessage(userId, question, aiResponse, metadata);
 
+            // ✅ Save session with updated messages
             ChatSession savedSession = chatSessionRepository.save(currentSession);
-            System.out.println("✅ Added AI conversation to unified session: " + savedSession.getId());
+
+            System.out.println("✅ Complete AI conversation saved - Question: " +
+                    question.substring(0, Math.min(50, question.length())) +
+                    ", Response: " + aiResponse.substring(0, Math.min(50, aiResponse.length())));
+
             return savedSession;
         } catch (Exception e) {
-            System.err.println("❌ Error adding AI message to unified session: " + e.getMessage());
+            System.err.println("❌ Error saving complete AI conversation: " + e.getMessage());
             e.printStackTrace();
-            throw new RuntimeException("Failed to add AI message to unified session: " + e.getMessage());
+            throw new RuntimeException("Failed to save AI conversation: " + e.getMessage());
         }
     }
+
 
     public ChatSession addSearchToSession(String userId, String query, String queryType, int resultsCount) {
         try {

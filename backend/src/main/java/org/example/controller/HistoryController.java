@@ -1,12 +1,17 @@
 package org.example.controller;
 
+import org.example.model.ChatMessage;
 import org.example.model.ChatSession;
+import org.example.model.SearchHistory;
 import org.example.service.HistoryService;
+import org.example.repository.ChatMessageRepository;
+import org.example.repository.SearchHistoryRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -18,6 +23,12 @@ public class HistoryController {
 
     @Autowired
     private HistoryService historyService;
+
+    @Autowired
+    private ChatMessageRepository chatMessageRepository;
+
+    @Autowired
+    private SearchHistoryRepository searchHistoryRepository;
 
     // ============================================
     // DAY-WISE SESSION ENDPOINTS
@@ -272,40 +283,90 @@ public class HistoryController {
         try {
             System.out.println("📋 Getting complete history for session: " + sessionId);
 
-            Map<String, Object> sessionData = historyService.getCompleteSessionHistory(sessionId);
-
-            if (!sessionData.isEmpty()) {
-                response.put("success", true);
-                response.putAll(sessionData);
-
-                @SuppressWarnings("unchecked")
-                List<Object> chatMessages = (List<Object>) sessionData.get("chatMessages");
-                @SuppressWarnings("unchecked")
-                List<Object> searchHistory = (List<Object>) sessionData.get("searchHistory");
-
-                Map<String, Object> stats = new HashMap<>();
-                stats.put("totalChatMessages", chatMessages != null ? chatMessages.size() : 0);
-                stats.put("totalSearches", searchHistory != null ? searchHistory.size() : 0);
-                stats.put("restoredAt", LocalDateTime.now());
-
-                response.put("restorationStats", stats);
-
-                System.out.println("✅ Complete session history retrieved successfully");
-                return ResponseEntity.ok(response);
-            } else {
+            // ✅ Get the session first
+            ChatSession session = historyService.getChatSessionById(sessionId);
+            if (session == null) {
                 response.put("success", false);
-                response.put("error", "Session history not found");
+                response.put("error", "Session not found");
                 return ResponseEntity.notFound().build();
             }
 
+            // ✅ Get detailed chat messages from chat_messages collection
+            List<ChatMessage> chatMessages = chatMessageRepository.findBySessionIdOrderByTimestampAsc(sessionId);
+
+            // ✅ Get detailed search history
+            List<SearchHistory> searchHistory = searchHistoryRepository.findBySessionIdOrderByTimestampAsc(sessionId);
+
+            // ✅ ALSO get messages from session object as backup
+            List<ChatMessage> sessionMessages = session.getMessages() != null ? session.getMessages() : new ArrayList<>();
+
+            // ✅ COMBINE all message sources
+            List<Map<String, Object>> allMessages = new ArrayList<>();
+
+            // Add from chat_messages collection
+            for (ChatMessage msg : chatMessages) {
+                Map<String, Object> msgMap = new HashMap<>();
+                msgMap.put("id", msg.getId());
+                msgMap.put("type", msg.getType());
+                msgMap.put("content", msg.getContent());
+                msgMap.put("timestamp", msg.getTimestamp());
+                msgMap.put("source", "detailed_collection");
+                allMessages.add(msgMap);
+            }
+
+            // Add from session messages if chat_messages is empty
+            if (chatMessages.isEmpty() && !sessionMessages.isEmpty()) {
+                for (ChatMessage msg : sessionMessages) {
+                    Map<String, Object> msgMap = new HashMap<>();
+                    msgMap.put("id", msg.getId() != null ? msg.getId() : "session_" + System.currentTimeMillis());
+                    msgMap.put("type", msg.getType());
+                    msgMap.put("content", msg.getContent());
+                    msgMap.put("timestamp", msg.getTimestamp());
+                    msgMap.put("source", "session_messages");
+                    allMessages.add(msgMap);
+                }
+            }
+
+            // ✅ Add AI responses from session as backup
+            if (session.getAiResponses() != null && !session.getAiResponses().isEmpty()) {
+                for (ChatSession.AIResponse aiResponse : session.getAiResponses()) {
+                    Map<String, Object> msgMap = new HashMap<>();
+                    msgMap.put("id", "ai_" + aiResponse.getTimestamp().toString());
+                    msgMap.put("type", "AI");
+                    msgMap.put("content", aiResponse.getResponse());
+                    msgMap.put("timestamp", aiResponse.getTimestamp());
+                    msgMap.put("source", "ai_responses");
+                    allMessages.add(msgMap);
+                }
+            }
+
+            response.put("success", true);
+            response.put("session", session);
+            response.put("chatMessages", allMessages);  // ✅ ALL messages combined
+            response.put("searchHistory", searchHistory);
+            response.put("documents", session.getDocumentDetails());
+
+            // ✅ Statistics
+            Map<String, Object> stats = new HashMap<>();
+            stats.put("totalChatMessages", allMessages.size());
+            stats.put("totalSearches", searchHistory.size());
+            stats.put("totalDocuments", session.getDocumentCount());
+            stats.put("restoredAt", LocalDateTime.now());
+            response.put("restorationStats", stats);
+
+            System.out.println("✅ Complete session history retrieved: " +
+                    allMessages.size() + " messages, " + searchHistory.size() + " searches");
+
+            return ResponseEntity.ok(response);
+
         } catch (Exception e) {
             System.err.println("❌ Error getting complete session history: " + e.getMessage());
+            e.printStackTrace();
             response.put("success", false);
             response.put("error", "Error fetching complete session history: " + e.getMessage());
             return ResponseEntity.status(500).body(response);
         }
     }
-
 
 
     @PostMapping("/session/{sessionId}/restore")

@@ -198,40 +198,40 @@ public class AIService {
 
         if (question.equals("GENERATE_COMPREHENSIVE_SUMMARY") || question.toLowerCase().contains("summary")) {
             prompt = String.format("""
-                You are an expert document analyzer tasked with providing comprehensive summaries.
-                
-                CRITICAL INSTRUCTIONS:
-                1. Analyze ALL documents provided below carefully
-                2. Create a comprehensive summary that covers information from ALL documents
-                3. Organize your summary by document or by topic areas
-                4. If documents are related, highlight connections and common themes
-                5. If documents cover different topics, provide separate sections for each
-                6. Mention the document names when referencing specific information
-                
-                DOCUMENTS TO ANALYZE:
-                %s
-                
-                Please provide a comprehensive summary covering all the documents above:
-                """, documentContext != null ? documentContext : "No documents provided");
+                    You are an expert document analyzer tasked with providing comprehensive summaries.
+                    
+                    CRITICAL INSTRUCTIONS:
+                    1. Analyze ALL documents provided below carefully
+                    2. Create a comprehensive summary that covers information from ALL documents
+                    3. Organize your summary by document or by topic areas
+                    4. If documents are related, highlight connections and common themes
+                    5. If documents cover different topics, provide separate sections for each
+                    6. Mention the document names when referencing specific information
+                    
+                    DOCUMENTS TO ANALYZE:
+                    %s
+                    
+                    Please provide a comprehensive summary covering all the documents above:
+                    """, documentContext != null ? documentContext : "No documents provided");
         } else {
             prompt = String.format("""
-                You are an expert document analyzer answering questions based on multiple documents.
-                
-                CRITICAL INSTRUCTIONS:
-                1. Search through ALL the documents provided below thoroughly
-                2. Answer the question using information from ALL relevant documents
-                3. When referencing information, mention which specific document it came from
-                4. If information is found in multiple documents, mention all relevant sources
-                5. If the answer requires combining information from multiple documents, do so clearly
-                6. If the information is not found in any document, state this explicitly
-                
-                DOCUMENTS TO SEARCH:
-                %s
-                
-                QUESTION TO ANSWER: %s
-                
-                Please provide a comprehensive answer based on ALL the documents above:
-                """, documentContext != null ? documentContext : "No documents provided", question);
+                    You are an expert document analyzer answering questions based on multiple documents.
+                    
+                    CRITICAL INSTRUCTIONS:
+                    1. Search through ALL the documents provided below thoroughly
+                    2. Answer the question using information from ALL relevant documents
+                    3. When referencing information, mention which specific document it came from
+                    4. If information is found in multiple documents, mention all relevant sources
+                    5. If the answer requires combining information from multiple documents, do so clearly
+                    6. If the information is not found in any document, state this explicitly
+                    
+                    DOCUMENTS TO SEARCH:
+                    %s
+                    
+                    QUESTION TO ANSWER: %s
+                    
+                    Please provide a comprehensive answer based on ALL the documents above:
+                    """, documentContext != null ? documentContext : "No documents provided", question);
         }
 
         // Create Gemini API request
@@ -392,4 +392,81 @@ public class AIService {
     public boolean isConfigured() {
         return !useMockAI && geminiApiKey != null && !geminiApiKey.trim().isEmpty() && !geminiApiKey.equals("YOUR_GEMINI_API_KEY_HERE");
     }
+
+    public String askQuestionWithContext(String question, String documentContent, Map<String, Object> context) {
+        try {
+            System.out.println("=== AI SERVICE: Processing question with context ===");
+            System.out.println("Question: " + question);
+            System.out.println("Context keys: " + (context != null ? context.keySet() : "none"));
+
+            // ✅ DECLARE: aiRequestContext variable before using it
+            Map<String, Object> aiRequestContext = new HashMap<>();
+            if (context != null) {
+                aiRequestContext.putAll(context); // Copy all context data
+            }
+
+            // ✅ ADD: Default context values if needed
+            aiRequestContext.put("timestamp", System.currentTimeMillis());
+            aiRequestContext.put("processingId", java.util.UUID.randomUUID().toString());
+
+            // ✅ BUILD: Enhanced prompt with context
+            StringBuilder promptBuilder = new StringBuilder();
+
+            // Add system context
+            promptBuilder.append("You are a helpful AI assistant analyzing documents. ");
+            promptBuilder.append("Provide accurate, detailed answers based on the document content provided.\n\n");
+
+            // Add request context if available
+            if (aiRequestContext.containsKey("requestId")) {
+                String requestId = String.valueOf(aiRequestContext.get("requestId"));
+                String sessionId = String.valueOf(aiRequestContext.get("sessionId"));
+
+                promptBuilder.append("REQUEST CONTEXT:\n");
+                promptBuilder.append("- Request ID: ").append(requestId).append("\n");
+                promptBuilder.append("- Session ID: ").append(sessionId).append("\n");
+                promptBuilder.append("- Processing Time: ").append(aiRequestContext.get("timestamp")).append("\n");
+
+                if (Boolean.TRUE.equals(aiRequestContext.get("forceRefresh"))) {
+                    promptBuilder.append("- Analysis Type: FRESH_ANALYSIS_REQUIRED\n");
+                }
+                promptBuilder.append("\n");
+            }
+
+            // Add document content
+            promptBuilder.append("DOCUMENT CONTENT:\n");
+            promptBuilder.append(documentContent);
+            promptBuilder.append("\n\n");
+
+            // Add the question
+            promptBuilder.append("QUESTION: ").append(question).append("\n\n");
+
+            // Add instructions for better responses
+            promptBuilder.append("INSTRUCTIONS:\n");
+            promptBuilder.append("- Answer based solely on the provided document content\n");
+            promptBuilder.append("- If information is not in the documents, state that clearly\n");
+            promptBuilder.append("- Provide specific references to document sections when possible\n");
+            promptBuilder.append("- Give comprehensive, detailed answers when the information is available\n");
+
+            String fullPrompt = promptBuilder.toString();
+
+            // ✅ CALL: Your existing AI method with the enhanced prompt
+            String response = askQuestionEnhanced(question, fullPrompt);
+
+            System.out.println("✅ AI response generated successfully with context");
+            return response;
+
+        } catch (Exception e) {
+            System.err.println("❌ Error in askQuestionWithContext: " + e.getMessage());
+            e.printStackTrace();
+
+            // ✅ FALLBACK: Use existing method if context method fails
+            try {
+                return askQuestionEnhanced(question, documentContent);
+            } catch (Exception fallbackError) {
+                return "Error processing your question: " + e.getMessage();
+            }
+        }
+    }
+
 }
+
