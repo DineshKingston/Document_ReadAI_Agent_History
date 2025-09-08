@@ -1,5 +1,13 @@
 package org.example.service;
 
+import java.io.InputStream;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
@@ -11,14 +19,6 @@ import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
-
-import java.io.InputStream;
-import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class DocumentProcessingService {
@@ -100,28 +100,61 @@ public class DocumentProcessingService {
         return enhanced;
     }
 
-    private String extractTextFromFile(MultipartFile file) throws Exception {
-        String filename = file.getOriginalFilename();
-        if (filename == null) {
-            throw new IllegalArgumentException("File name is null");
-        }
-
-        String lowerFilename = filename.toLowerCase();
-        try (InputStream inputStream = file.getInputStream()) {
-            if (lowerFilename.endsWith(".pdf")) {
-                return extractFromPDF(file, inputStream);
-            } else if (lowerFilename.endsWith(".docx")) {
-                return extractFromDOCX(file, inputStream);
-            } else if (lowerFilename.endsWith(".doc")) {
-                return extractFromDOC(file, inputStream);
-            } else if (lowerFilename.endsWith(".txt")) {
-                return extractFromTXT(file);
-            } else {
-                throw new IllegalArgumentException("Unsupported file type: " + filename +
-                        ". Supported formats: PDF, DOCX, DOC, TXT");
+    private boolean isRestoredSessionContent(MultipartFile file) {
+    try {
+        // Check content type
+        String contentType = file.getContentType();
+        if ("text/plain".equals(contentType)) {
+            // Read first few bytes to check for session markers
+            byte[] firstBytes = new byte[Math.min(500, (int) file.getSize())];
+            try (InputStream is = file.getInputStream()) {
+                is.read(firstBytes);
+                String preview = new String(firstBytes, "UTF-8");
+                
+                // Look for session restoration markers
+                return preview.contains("DOCUMENT:") || 
+                       preview.contains("RESTORED:") || 
+                       preview.contains("=== DOCUMENT") ||
+                       preview.contains("Session restored");
             }
         }
+        return false;
+    } catch (Exception e) {
+        return false;
     }
+}
+
+// ✅ ENHANCED: Detect and handle restored session content
+private String extractTextFromFile(MultipartFile file) throws Exception {
+    String filename = file.getOriginalFilename();
+    if (filename == null) {
+        throw new IllegalArgumentException("File name is null");
+    }
+
+    // ✅ Check if this is restored session content (text blob)
+    if (isRestoredSessionContent(file)) {
+        String content = new String(file.getBytes(), "UTF-8");
+        System.out.println("📄 Restored session content detected: " + filename + " (" + content.length() + " chars)");
+        return content;
+    }
+
+    // ✅ Original file processing logic
+    String lowerFilename = filename.toLowerCase();
+    try (InputStream inputStream = file.getInputStream()) {
+        if (lowerFilename.endsWith(".pdf")) {
+            return extractFromPDF(file, inputStream);
+        } else if (lowerFilename.endsWith(".docx")) {
+            return extractFromDOCX(file, inputStream);
+        } else if (lowerFilename.endsWith(".doc")) {
+            return extractFromDOC(file, inputStream);
+        } else if (lowerFilename.endsWith(".txt")) {
+            return extractFromTXT(file);
+        } else {
+            throw new IllegalArgumentException("Unsupported file type: " + filename +
+                ". Supported formats: PDF, DOCX, DOC, TXT");
+        }
+    }
+}
 
     /**
      * ✅ ENHANCED: PDFBox 3.x compatible PDF extraction with better error handling

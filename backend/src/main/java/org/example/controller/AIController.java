@@ -1,15 +1,27 @@
 package org.example.controller;
 
-import java.util.*;
-
-import jakarta.servlet.http.HttpServletRequest;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
-import org.springframework.web.multipart.MultipartFile;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 import org.example.service.AIService;
 import org.example.service.DocumentProcessingService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.CrossOrigin;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
+
+import jakarta.servlet.http.HttpServletRequest;
 
 @RestController
 @RequestMapping("/api/ai")
@@ -75,80 +87,92 @@ public class AIController {
     // AI QUERY ENDPOINT
     // ============================================
 
-    @PostMapping("/ask")
-    public ResponseEntity<Map<String, Object>> askQuestion(
-            @RequestBody Map<String, Object> request,
-            @RequestHeader(value = "X-Request-ID", required = false) String requestId,
-            @RequestHeader(value = "X-Session-Context", required = false) String sessionContext,
-            @RequestHeader(value = "X-Conversation-Turn", required = false) String conversationTurn,
-            HttpServletRequest httpRequest) {
+@PostMapping("/ask")
+public ResponseEntity<Map<String, Object>> askQuestion(
+        @RequestBody Map<String, Object> request,
+        @RequestHeader(value = "X-Session-ID", required = false) String sessionId,
+        HttpServletRequest httpRequest) {
+    
+    Map<String, Object> response = new HashMap<>();
+    try {
+        System.out.println("=== AI QUERY DEBUG ===");
+        System.out.println("Session ID: " + sessionId);
+        System.out.println("Request received: " + request);
 
-        Map<String, Object> response = new HashMap<>();
-        try {
-            System.out.println("=== AI QUERY DEBUG ===");
-            System.out.println("Request received: " + request);
-
-            // ✅ CRITICAL: Check document state before processing
-            int docCount = documentProcessingService.getDocumentCount();
-            List<String> docNames = documentProcessingService.getDocumentNames();
-
-            System.out.println("=== DOCUMENT STATE CHECK ===");
-            System.out.println("Document count: " + docCount);
-            System.out.println("Document names: " + docNames);
-
-            // Force persistence check
-            documentProcessingService.ensureDocumentPersistence();
-
-            String question = String.valueOf(request.get("question")).trim();
-            if (question.isEmpty()) {
-                response.put("success", false);
-                response.put("error", "Question cannot be empty");
-                return ResponseEntity.badRequest().body(response);
-            }
-
-            // ✅ Get documents with detailed logging
-            String allDocumentsContent = documentProcessingService.getAllDocumentsContentEnhanced();
-
-            System.out.println("=== CONTENT RETRIEVAL DEBUG ===");
-            System.out.println("Content length: " + (allDocumentsContent != null ? allDocumentsContent.length() : 0));
-            System.out.println("Content is null: " + (allDocumentsContent == null));
-            System.out.println("Content is empty: " + (allDocumentsContent != null && allDocumentsContent.trim().isEmpty()));
-
-            if (allDocumentsContent == null || allDocumentsContent.trim().isEmpty()) {
-                // ✅ ENHANCED: Try to recover from upload/multiple endpoint state
-                System.err.println("❌ No documents found, but upload may have succeeded");
-
-                response.put("success", false);
-                response.put("error", "Documents not found in AI backend. Please try re-uploading your files.");
-                response.put("debugInfo", Map.of(
-                        "documentCount", docCount,
-                        "documentNames", docNames,
-                        "contentLength", allDocumentsContent != null ? allDocumentsContent.length() : 0,
-                        "suggestion", "Try refreshing the page and re-uploading files"
-                ));
-                return ResponseEntity.badRequest().body(response);
-            }
-
-            // Continue with AI processing...
-            String answer = aiService.askQuestionEnhanced(question, allDocumentsContent);
-
-            response.put("success", true);
-            response.put("answer", answer);
-            response.put("question", question);
-            response.put("documentsAnalyzed", docCount);
-            response.put("documentNames", docNames);
-            response.put("timestamp", System.currentTimeMillis());
-
-            return ResponseEntity.ok(response);
-
-        } catch (Exception e) {
-            System.err.println("❌ Error in AI query: " + e.getMessage());
-            e.printStackTrace();
+        // ✅ ENHANCED: Check for session-aware processing
+        String question = String.valueOf(request.get("question")).trim();
+        if (question.isEmpty()) {
             response.put("success", false);
-            response.put("error", "Error processing question: " + e.getMessage());
-            return ResponseEntity.status(500).body(response);
+            response.put("error", "Question cannot be empty");
+            return ResponseEntity.badRequest().body(response);
         }
+
+        // ✅ CRITICAL: Verify document state with session context
+        int docCount = documentProcessingService.getDocumentCount();
+        List<String> docNames = documentProcessingService.getDocumentNames();
+        
+        System.out.println("=== DOCUMENT STATE CHECK ===");
+        System.out.println("Document count: " + docCount);
+        System.out.println("Document names: " + docNames);
+        System.out.println("Session ID: " + sessionId);
+
+        // ✅ Force persistence check for restored sessions
+        if (sessionId != null && sessionId.contains("_2025-09-07_")) {
+            System.out.println("🔄 Detected restored session, ensuring document persistence");
+            documentProcessingService.ensureDocumentPersistence();
+        }
+
+        String allDocumentsContent = documentProcessingService.getAllDocumentsContentEnhanced();
+        
+        System.out.println("=== CONTENT RETRIEVAL DEBUG ===");
+        System.out.println("Content length: " + (allDocumentsContent != null ? allDocumentsContent.length() : 0));
+        System.out.println("Content preview: " + (allDocumentsContent != null ? 
+            allDocumentsContent.substring(0, Math.min(200, allDocumentsContent.length())) : "null"));
+
+        if (allDocumentsContent == null || allDocumentsContent.trim().isEmpty()) {
+            response.put("success", false);
+            response.put("error", "Documents not found in AI backend. Please try re-uploading your files.");
+            response.put("debugInfo", Map.of(
+                "documentCount", docCount,
+                "documentNames", docNames,
+                "sessionId", sessionId != null ? sessionId : "none",
+                "suggestion", "Try refreshing the page and re-uploading files"
+            ));
+            return ResponseEntity.badRequest().body(response);
+        }
+
+        // ✅ Enhanced question processing with session context
+        String contextualQuestion = buildSessionAwareQuestion(question, sessionId, docNames);
+        String answer = aiService.askQuestionEnhanced(contextualQuestion, allDocumentsContent);
+
+        response.put("success", true);
+        response.put("answer", answer);
+        response.put("question", question);
+        response.put("documentsAnalyzed", docCount);
+        response.put("documentNames", docNames);
+        response.put("sessionId", sessionId);
+        response.put("timestamp", System.currentTimeMillis());
+
+        return ResponseEntity.ok(response);
+    } catch (Exception e) {
+        System.err.println("❌ Error in AI query: " + e.getMessage());
+        e.printStackTrace();
+        response.put("success", false);
+        response.put("error", "Error processing question: " + e.getMessage());
+        return ResponseEntity.status(500).body(response);
     }
+}
+
+// ✅ HELPER: Build session-aware question
+private String buildSessionAwareQuestion(String question, String sessionId, List<String> docNames) {
+    StringBuilder enhanced = new StringBuilder();
+    enhanced.append("SESSION_CONTEXT: ").append(sessionId != null ? sessionId : "new_session").append("\n");
+    enhanced.append("AVAILABLE_DOCUMENTS: ").append(String.join(", ", docNames)).append("\n");
+    enhanced.append("USER_QUESTION: ").append(question).append("\n");
+    enhanced.append("INSTRUCTION: Analyze the provided documents to answer the user's question. If document content is unavailable, clearly state this limitation.");
+    
+    return enhanced.toString();
+}
 
 
     // Add these methods to AIController.java
